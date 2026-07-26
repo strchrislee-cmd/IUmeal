@@ -1,6 +1,6 @@
 /* ==========================================================
- * IUmeal — 세계의 이유식 마켓 & 키친
- * 게임 엔진 + UI 로직 (vanilla JS, 서버 불필요)
+ * IUmeal — UI / 상태 / 기록 로직
+ * (2D 도트 게임 엔진은 game.js 의 Game 모듈)
  * 모든 데이터(사진 포함)는 브라우저 localStorage에만 저장됩니다.
  * ========================================================== */
 
@@ -10,7 +10,6 @@ const STORAGE_KEY = "iumeal_v1";
 const state = {
   profile: { name: "", months: 6, allergies: [] },
   scene: "market",          // market | kitchen
-  pos: { market: { x: 6, y: 6 }, kitchen: { x: 6, y: 6 } },
   cart: [],                 // ingredient id 배열 (중복 = 수량)
   inventory: {},            // { id: count }
   records: [],              // 요리 기록
@@ -19,7 +18,10 @@ const state = {
 
 function saveState() {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      profile: state.profile, scene: state.scene, cart: state.cart,
+      inventory: state.inventory, records: state.records, started: state.started,
+    }));
   } catch (e) {
     toast("⚠️ 저장 공간이 가득 찼어요. 일지에서 오래된 기록을 삭제해 주세요.");
   }
@@ -30,70 +32,19 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const s = JSON.parse(raw);
-    Object.assign(state, s);
+    if (s.profile) state.profile = { name: "", months: 6, allergies: [], ...s.profile };
+    if (s.scene === "market" || s.scene === "kitchen") state.scene = s.scene;
+    if (Array.isArray(s.cart)) state.cart = s.cart;
+    if (s.inventory && typeof s.inventory === "object") state.inventory = s.inventory;
+    if (Array.isArray(s.records)) state.records = s.records;
+    state.started = !!s.started;
   } catch (e) { /* 손상된 데이터는 무시하고 새로 시작 */ }
 }
 
-/* ---------- 맵 정의 ---------- */
-const MAPS = {
-  market: {
-    name: "🛒 세계 식자재 마트",
-    playerStart: { x: 6, y: 6 },
-    rows: [
-      "#############",
-      "#VVV.FFF.MMM#",
-      "#...........#",
-      "#...........#",
-      "#GGG.....DDD#",
-      "#...........#",
-      "#...........#",
-      "#..CC.......#",
-      "######E######",
-    ],
-    floorClass: "floor",
-    objects: {
-      V: { emoji: "🥬", label: "채소 코너",        action: () => openShop("veg") },
-      F: { emoji: "🍎", label: "과일 코너",        action: () => openShop("fruit") },
-      M: { emoji: "🥩", label: "정육·수산 코너",   action: () => openShop("meat") },
-      G: { emoji: "🌾", label: "곡물 코너",        action: () => openShop("grain") },
-      D: { emoji: "🧈", label: "유제품·기타 코너", action: () => openShop("dairy") },
-      C: { emoji: "🛒", label: "계산대 (장바구니 확인)", action: () => openCart() },
-      E: { emoji: "🚪", label: "주방으로 가는 문", door: "kitchen" },
-    },
-  },
-  kitchen: {
-    name: "🍳 우리집 주방",
-    playerStart: { x: 6, y: 7 },
-    rows: [
-      "#############",
-      "#RR..BB..TT.#",
-      "#...........#",
-      "#...........#",
-      "#JJ.........#",
-      "#...........#",
-      "#...........#",
-      "#...........#",
-      "######E######",
-    ],
-    floorClass: "kfloor",
-    objects: {
-      R: { emoji: "🧊", label: "냉장고 (보유 식자재)", action: () => openFridge() },
-      B: { emoji: "🍳", label: "조리대 (레시피북 펼치기)", action: () => openRecipeBook() },
-      T: { emoji: "🍽️", label: "식탁 (식사 일지 & 공유)", action: () => openJournal() },
-      J: { emoji: "📚", label: "책장 (이유식 가이드)", action: () => openGuide() },
-      E: { emoji: "🚪", label: "마트로 가는 문", door: "market" },
-    },
-  },
-};
-
-/* ---------- DOM 참조 ---------- */
+/* ---------- DOM/유틸 ---------- */
 const $ = (sel) => document.querySelector(sel);
-const mapEl = $("#map");
-let playerEl = null;
-let tileSize = 44;
 
-/* ---------- 유틸 ---------- */
-function toast(msg, ms = 2200) {
+function toast(msg, ms = 2400) {
   const t = $("#toast");
   t.textContent = msg;
   t.classList.add("show");
@@ -122,189 +73,6 @@ function exposureCounts() {
   return counts;
 }
 
-/* ---------- 맵 렌더링 ---------- */
-function renderMap() {
-  const map = MAPS[state.scene];
-  const rows = map.rows;
-  const H = rows.length, W = rows[0].length;
-
-  mapEl.innerHTML = "";
-  mapEl.style.gridTemplateColumns = `repeat(${W}, var(--tile))`;
-
-  const labeled = new Set(); // 같은 행의 연속된 오브젝트 묶음당 라벨 1개
-
-  for (let y = 0; y < H; y++) {
-    for (let x = 0; x < W; x++) {
-      const ch = rows[y][x];
-      const tile = document.createElement("div");
-      tile.className = "tile";
-
-      if (ch === "#") {
-        tile.classList.add("wall");
-        tile.textContent = "";
-      } else if (ch === ".") {
-        tile.classList.add(map.floorClass);
-        if ((x + y) % 2 === 0) tile.classList.add("alt");
-      } else if (map.objects[ch]) {
-        const obj = map.objects[ch];
-        if (obj.door) {
-          tile.classList.add("door");
-        } else {
-          tile.classList.add("obj");
-          if (state.scene === "kitchen") tile.classList.add("kitchen-obj");
-        }
-        tile.textContent = obj.emoji;
-        const groupKey = `${ch}-${y}-${runStart(rows[y], x, ch)}`;
-        if (!labeled.has(groupKey) && !obj.door) {
-          labeled.add(groupKey);
-          const label = document.createElement("span");
-          label.className = "tile-label";
-          label.textContent = obj.label.split(" (")[0];
-          tile.appendChild(label);
-        }
-      }
-      mapEl.appendChild(tile);
-    }
-  }
-
-  playerEl = document.createElement("div");
-  playerEl.id = "player";
-  playerEl.textContent = "🧑‍🍳";
-  mapEl.appendChild(playerEl);
-
-  $("#scene-name").textContent = map.name;
-  requestAnimationFrame(positionPlayer);
-}
-
-function runStart(row, x, ch) {
-  let s = x;
-  while (s > 0 && row[s - 1] === ch) s--;
-  return s;
-}
-
-function positionPlayer() {
-  const firstTile = mapEl.querySelector(".tile");
-  if (!firstTile || !playerEl) return;
-  tileSize = firstTile.offsetWidth;
-  const p = state.pos[state.scene];
-  playerEl.style.transform = `translate(${p.x * tileSize}px, ${p.y * tileSize}px)`;
-  updateHint();
-}
-
-/* ---------- 이동/상호작용 ---------- */
-function tileAt(x, y) {
-  const rows = MAPS[state.scene].rows;
-  if (y < 0 || y >= rows.length || x < 0 || x >= rows[0].length) return "#";
-  return rows[y][x];
-}
-
-function isWalkable(ch) {
-  if (ch === ".") return true;
-  const obj = MAPS[state.scene].objects[ch];
-  return !!(obj && obj.door);
-}
-
-function move(dx, dy) {
-  if (!$("#modal-overlay").classList.contains("hidden")) return;
-  const p = state.pos[state.scene];
-  const nx = p.x + dx, ny = p.y + dy;
-  const ch = tileAt(nx, ny);
-  if (!isWalkable(ch)) { updateHint(); return; }
-
-  p.x = nx; p.y = ny;
-  positionPlayer();
-
-  const obj = MAPS[state.scene].objects[ch];
-  if (obj && obj.door) {
-    setTimeout(() => enterDoor(obj.door), 150);
-  } else {
-    saveState();
-  }
-}
-
-function enterDoor(target) {
-  const from = state.scene;
-  state.scene = target;
-  state.pos[target] = { ...MAPS[target].playerStart };
-
-  if (from === "market" && target === "kitchen") {
-    if (state.cart.length > 0) {
-      for (const id of state.cart) state.inventory[id] = (state.inventory[id] || 0) + 1;
-      const n = state.cart.length;
-      state.cart = [];
-      updateCartBadge();
-      toast(`🏠 주방 도착! 장바구니 식자재 ${n}개를 냉장고에 정리했어요.`);
-    } else {
-      toast("🏠 주방에 도착했어요. 냉장고·조리대·식탁·책장을 둘러보세요!");
-    }
-  } else if (target === "market") {
-    toast("🛒 마트에 도착했어요. 코너 앞에서 확인 버튼을 누르면 담을 수 있어요!");
-  }
-  renderMap();
-  saveState();
-}
-
-function adjacentObject() {
-  const p = state.pos[state.scene];
-  const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
-  for (const [dx, dy] of dirs) {
-    const ch = tileAt(p.x + dx, p.y + dy);
-    const obj = MAPS[state.scene].objects[ch];
-    if (obj && !obj.door) return obj;
-  }
-  // 문 위에 서 있으면 문 안내
-  const here = MAPS[state.scene].objects[tileAt(p.x, p.y)];
-  if (here && here.door) return here;
-  return null;
-}
-
-function interact() {
-  if (!$("#modal-overlay").classList.contains("hidden")) return;
-  const obj = adjacentObject();
-  if (!obj) { toast("주변에 상호작용할 것이 없어요. 코너나 가구 옆으로 이동해 보세요!"); return; }
-  if (obj.door) { enterDoor(obj.door); return; }
-  obj.action();
-}
-
-function updateHint() {
-  const obj = adjacentObject();
-  const hint = $("#hintbar");
-  if (obj) {
-    hint.innerHTML = `<span class="key">Space / A</span> ${esc(obj.label)}`;
-  } else {
-    hint.innerHTML = `<span class="key">←↑↓→</span> 이동 &nbsp;·&nbsp; 코너/가구 옆에서 <span class="key">Space / A</span>`;
-  }
-}
-
-/* ---------- 입력 ---------- */
-document.addEventListener("keydown", (e) => {
-  if (!state.started) return;
-  const modalOpen = !$("#modal-overlay").classList.contains("hidden");
-  if (e.key === "Escape" && modalOpen) { closeModal(); return; }
-  if (modalOpen) return;
-  const k = e.key.toLowerCase();
-  if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(e.key.toLowerCase()) || ["w", "a", "s", "d"].includes(k)) {
-    e.preventDefault();
-  }
-  if (e.key === "ArrowUp" || k === "w") move(0, -1);
-  else if (e.key === "ArrowDown" || k === "s") move(0, 1);
-  else if (e.key === "ArrowLeft" || k === "a") move(-1, 0);
-  else if (e.key === "ArrowRight" || k === "d") move(1, 0);
-  else if (e.key === " " || e.key === "Enter") interact();
-});
-
-document.querySelectorAll("#dpad button").forEach((b) => {
-  b.addEventListener("click", () => {
-    const d = b.dataset.dir;
-    if (d === "up") move(0, -1);
-    else if (d === "down") move(0, 1);
-    else if (d === "left") move(-1, 0);
-    else if (d === "right") move(1, 0);
-  });
-});
-$("#act-btn").addEventListener("click", interact);
-window.addEventListener("resize", positionPlayer);
-
 /* ---------- 모달 ---------- */
 function openModal(title, html) {
   $("#modal-title").innerHTML = title;
@@ -315,11 +83,13 @@ function openModal(title, html) {
 }
 function closeModal() {
   $("#modal-overlay").classList.add("hidden");
-  updateHint();
 }
 $("#modal-close").addEventListener("click", closeModal);
 $("#modal-overlay").addEventListener("click", (e) => {
   if (e.target === $("#modal-overlay")) closeModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#modal-overlay").classList.contains("hidden")) closeModal();
 });
 
 /* ---------- 식자재 태그 ---------- */
@@ -385,13 +155,13 @@ function updateCartBadge() {
 /* ---------- 장바구니 ---------- */
 function openCart() {
   if (state.cart.length === 0) {
-    openModal("🛒 장바구니", `<p>장바구니가 비어 있어요.<br>마트 코너 앞에서 <b>확인(Space/A)</b>을 눌러 식자재를 담아 보세요!</p>`);
+    openModal("🛒 장바구니", `<p>장바구니가 비어 있어요.<br>마트 코너 앞에서 <b>SPACE / A</b>를 눌러 식자재를 담아 보세요!</p>`);
     return;
   }
   const grouped = {};
   for (const id of state.cart) grouped[id] = (grouped[id] || 0) + 1;
 
-  let html = `<p style="margin-bottom:10px">담은 식자재를 가지고 <b>🚪 문</b>으로 나가면 주방 냉장고에 자동으로 정리돼요.</p><div class="ing-grid">`;
+  let html = `<p style="margin-bottom:10px">담은 식자재를 가지고 아래쪽 <b>🚪 문</b>으로 걸어가면 주방 냉장고에 자동으로 정리돼요.</p><div class="ing-grid">`;
   for (const [id, n] of Object.entries(grouped)) {
     const ing = ING[id];
     html += `
@@ -417,7 +187,7 @@ function openCart() {
 function openFridge() {
   const entries = Object.entries(state.inventory).filter(([, n]) => n > 0);
   if (entries.length === 0) {
-    openModal("🧊 냉장고", `<p>냉장고가 비어 있어요.<br><b>🚪 문</b>으로 나가 마트에서 장을 봐 오세요!</p>`);
+    openModal("🧊 냉장고", `<p>냉장고가 비어 있어요.<br>아래쪽 <b>🚪 문</b>으로 나가 마트에서 장을 봐 오세요!</p>`);
     return;
   }
   let html = `<p style="margin-bottom:10px">보유 식자재예요. 조리대에서 <b>레시피북</b>을 펼치면 이 재료로 만들 수 있는 각국 이유식을 알려드려요.</p><div class="ing-grid">`;
@@ -449,7 +219,7 @@ function openRecipeBook() {
   const inv = Object.values(state.inventory).some((n) => n > 0);
   let html = `<div class="recipe-filters" id="rb-filters">
     <button data-f="all" class="${recipeFilter === "all" ? "active" : ""}">전체</button>
-    <button data-f="craftable" class="${recipeFilter === "craftable" ? "active" : ""}">✅ 지금 만들 수 있어요</button>`;
+    <button data-f="craftable" class="${recipeFilter === "craftable" ? "active" : ""}">✅ 지금 가능</button>`;
   for (const [k, c] of Object.entries(COUNTRIES)) {
     html += `<button data-f="${k}" class="${recipeFilter === k ? "active" : ""}">${c.flag} ${c.name}</button>`;
   }
@@ -462,7 +232,6 @@ function openRecipeBook() {
   let list = RECIPES.slice().map((r) => ({ r, st: recipeStatus(r) }));
   if (recipeFilter === "craftable") list = list.filter((x) => x.st.craftable);
   else if (recipeFilter !== "all") list = list.filter((x) => x.r.country === recipeFilter);
-  // 만들 수 있는 레시피 먼저
   list.sort((a, b) => (b.st.craftable ? 1 : 0) - (a.st.craftable ? 1 : 0));
 
   if (list.length === 0) {
@@ -528,7 +297,6 @@ function startCooking(recipeId) {
   const st = recipeStatus(r);
   if (!st.craftable) { toast("재료가 부족해요!"); return; }
 
-  // 필수 재료 소비
   for (const id of r.req) state.inventory[id] -= 1;
   saveState();
 
@@ -641,7 +409,6 @@ function saveRecord() {
   saveState();
   draft = null;
 
-  // 노출 카운터 피드백
   const counts = exposureCounts();
   const feedback = r.req.map((id) => {
     const n = counts[id] || 0;
@@ -799,11 +566,9 @@ function openProfile() {
   const p = state.profile;
   const html = `
     <label class="field" style="display:block;font-weight:700;margin-bottom:4px">아기 이름 (별명)</label>
-    <input type="text" id="pf-name" value="${esc(p.name)}" maxlength="12"
-      style="width:100%;padding:10px;border:2px solid #e8ddd0;border-radius:10px;font-size:1rem">
+    <input type="text" id="pf-name" value="${esc(p.name)}" maxlength="12" class="pixel-input">
     <label class="field" style="display:block;font-weight:700;margin:12px 0 4px">아기 월령 (개월)</label>
-    <input type="number" id="pf-months" value="${p.months}" min="4" max="36"
-      style="width:100%;padding:10px;border:2px solid #e8ddd0;border-radius:10px;font-size:1rem">
+    <input type="number" id="pf-months" value="${p.months}" min="4" max="36" class="pixel-input">
     <label class="field" style="display:block;font-weight:700;margin:12px 0 6px">알레르기 이력</label>
     <div class="allergy-grid" id="pf-allergy">${allergyCheckboxes(p.allergies)}</div>
     <button class="btn-cook" id="pf-save" style="margin-top:16px">저장</button>
@@ -814,10 +579,48 @@ function openProfile() {
     p.months = Math.max(4, Math.min(36, parseInt($("#pf-months").value, 10) || 6));
     p.allergies = [...document.querySelectorAll("#pf-allergy input:checked")].map((c) => c.value);
     saveState();
+    Game.setNames({ player: chefName(), baby: p.name || "아기" });
     closeModal();
     toast("프로필을 저장했어요!");
   });
 }
+
+function chefName() {
+  return state.profile.name ? `${state.profile.name}네 셰프` : "우리집 셰프";
+}
+
+/* ---------- 게임 연결 ---------- */
+Game.onAction((action) => {
+  if (action.startsWith("shop:")) openShop(action.slice(5));
+  else if (action === "cart") openCart();
+  else if (action === "fridge") openFridge();
+  else if (action === "recipes") openRecipeBook();
+  else if (action === "journal") openJournal();
+  else if (action === "guide") openGuide();
+});
+
+Game.onDoor((target) => {
+  const from = state.scene;
+  state.scene = target;
+
+  if (from === "market" && target === "kitchen") {
+    if (state.cart.length > 0) {
+      for (const id of state.cart) state.inventory[id] = (state.inventory[id] || 0) + 1;
+      const n = state.cart.length;
+      state.cart = [];
+      updateCartBadge();
+      toast(`🏠 주방 도착! 장바구니 식자재 ${n}개를 냉장고에 정리했어요.`);
+    } else {
+      toast("🏠 주방에 도착했어요. 냉장고·조리대·식탁·책장을 둘러보세요!");
+    }
+  } else if (target === "market") {
+    toast("🛒 마트에 도착했어요. 코너 앞에서 SPACE / A를 눌러 담아 보세요!");
+  }
+
+  const name = Game.setScene(target);
+  $("#scene-name").textContent = name;
+  saveState();
+});
 
 /* ---------- 상단 버튼 ---------- */
 $("#btn-cart").addEventListener("click", openCart);
@@ -845,9 +648,10 @@ function initStartScreen() {
 function startGame() {
   $("#start-screen").classList.add("hidden");
   $("#game-screen").classList.remove("hidden");
-  renderMap();
+  const name = Game.start(state.scene, { player: chefName(), baby: state.profile.name || "아기" });
+  $("#scene-name").textContent = name;
   updateCartBadge();
-  toast(`🧑‍🍳 ${state.profile.name ? state.profile.name + " 보호자님, " : ""}환영해요! 화살표(또는 버튼)로 움직여 코너에 다가가 보세요.`, 3200);
+  toast(`🧑‍🍳 환영해요! 방향키(또는 패드)를 꾹 누르면 캐릭터가 움직여요.`, 3200);
 }
 
 /* ---------- 부팅 ---------- */
