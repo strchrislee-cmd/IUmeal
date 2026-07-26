@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>IUmeal — 세계의 이유식 마켓 & 키친</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ===== 시작 화면 ===== -->
+  <section id="start-screen">
+    <div class="start-card">
+      <h1>🍼 IUmeal</h1>
+      <p class="tagline">캐릭터를 움직여 장을 보고, 세계 7개국의 이유식을 만들어 기록하는 프로그램</p>
+
+      <label class="field" for="baby-name">아기 이름 (별명)</label>
+      <input type="text" id="baby-name" placeholder="예: 콩이" maxlength="12" />
+
+      <label class="field" for="baby-months">아기 월령 (개월)</label>
+      <input type="number" id="baby-months" min="4" max="36" value="6" />
+
+      <label class="field">알레르기 이력 (있다면 체크 — 레시피북에서 경고해 드려요)</label>
+      <div class="allergy-grid" id="allergy-grid"></div>
+
+      <div class="disclaimer-box" id="start-disclaimer"></div>
+
+      <button class="btn-primary" id="btn-start">🛒 마트로 출발!</button>
+    </div>
+  </section>
+
+  <!-- ===== 게임 화면 ===== -->
+  <section id="game-screen" class="hidden">
+    <header id="topbar">
+      <span class="logo">🍼 IUmeal</span>
+      <span id="scene-name">마트</span>
+      <span class="spacer"></span>
+      <button class="top-btn" id="btn-cart">🛒 장바구니<span class="badge hidden" id="cart-badge">0</span></button>
+      <button class="top-btn" id="btn-journal">📔 일지</button>
+      <button class="top-btn" id="btn-guide">📚 가이드</button>
+      <button class="top-btn" id="btn-profile">👶 프로필</button>
+    </header>
+
+    <div id="map-wrap">
+      <div id="map"></div>
+    </div>
+
+    <div id="hintbar"></div>
+
+    <div id="touch-controls">
+      <div id="dpad">
+        <button class="d-up" data-dir="up">▲</button>
+        <button class="d-left" data-dir="left">◀</button>
+        <button class="d-down" data-dir="down">▼</button>
+        <button class="d-right" data-dir="right">▶</button>
+      </div>
+      <button id="act-btn">확인<br>(A)</button>
+    </div>
+  </section>
+
+  <!-- ===== 모달 ===== -->
+  <div id="modal-overlay" class="hidden">
+    <div id="modal">
+      <div id="modal-header">
+        <h2 id="modal-title"></h2>
+        <button id="modal-close">✕</button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
